@@ -34,7 +34,7 @@ provision:
       address=/host.docker.internal/192.168.5.2
       EOT
       if [ ! -d /var/lib/rancher/k3s ]; then
-        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --write-kubeconfig-mode 644" sh -
+        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --write-kubeconfig-mode 644 --disable traefik" sh -
       fi
       sed -i 's/^nameserver.*/nameserver 127.0.0.1/' /etc/resolv.conf
       rc-update add dnsmasq
