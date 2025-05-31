@@ -1,0 +1,78 @@
+# This template requires Lima v0.7.0 or later.
+# Using the Alpine 3.19 aarch64 image with vmType=vz requires macOS Ventura 13.3 or later.
+cpus: 8
+memory: 8GiB
+mountType: virtiofs
+networks:
+  - vzNAT: true
+disk: 120GiB
+vmType: vz
+images:
+  - location: "https://github.com/lima-vm/alpine-lima/releases/download/v0.2.43/alpine-lima-std-3.21.3-aarch64.iso"
+    arch: "aarch64"
+mounts:
+  - location: "~"
+    writable: true
+  - location: "/tmp/lima"
+    writable: true
+  - location: "/Volumes/osx_external/Downloads"
+    writable: true
+# The built-in containerd installer does not support Alpine currently.
+# Hint: use the "rd" ISO instead of the "std" ISO to enable containerd: https://github.com/lima-vm/alpine-lima/releases/
+containerd:
+  system: false
+  user: false
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      apk add dnsmasq curl
+      cat <<-EOT >>/etc/dnsmasq.conf
+      server=192.168.5.2
+      address=/local-app.transzap.com/192.168.107.2
+      address=/host.docker.internal/192.168.5.2
+      EOT
+      if [ ! -d /var/lib/rancher/k3s ]; then
+        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --write-kubeconfig-mode 644" sh -
+      fi
+      sed -i 's/^nameserver.*/nameserver 127.0.0.1/' /etc/resolv.conf
+      rc-update add dnsmasq
+      rc-service dnsmasq start
+      /etc/init.d/k3s start
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      sudo usermod -aG dnsmasq $USER
+probes:
+- script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    if ! timeout 15s bash -c "until pgrep dnsmasq; do sleep 3; done"; then
+      echo >&2 "dnsmasq is not running"
+      exit 1
+    fi
+    if ! timeout 15s bash -c "until pgrep k3s; do sleep 3; done"; then
+      echo >&2 "k3s is not running"
+      exit 1
+    fi
+copyToHost:
+- guest: "/etc/rancher/k3s/k3s.yaml"
+  host: "{{.Dir}}/copied-from-guest/kubeconfig.yaml"
+  deleteOnStop: true
+#hostResolver:
+#  # hostResolver.hosts requires lima 0.8.3 or later. Names defined here will also
+#  # resolve inside containers, and not just inside the VM itself.
+#  enabled: false
+#  hosts:
+#    host.docker.internal: 192.168.5.2
+#portForwards:
+#  - guestSocket: "/var/run/docker.sock"
+#    hostSocket: "{{.Dir}}/sock/docker.sock"
+message: |
+  To run `kubectl` on the host (assumes kubectl is installed), run the following commands:
+  ------
+  export KUBECONFIG="{{.Dir}}/copied-from-guest/kubeconfig.yaml"
+  kubectl ...
+  ------

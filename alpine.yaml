@@ -1,0 +1,76 @@
+# This template requires Lima v0.7.0 or later.
+# Using the Alpine 3.19 aarch64 image with vmType=vz requires macOS Ventura 13.3 or later.
+cpus: 8
+memory: 8GiB
+mountType: virtiofs
+networks:
+  - vzNAT: true
+disk: 120GiB
+vmType: vz
+rosetta:
+  enabled: true
+  binfmt: true
+images:
+# use rancher desktop image at https://github.com/rancher-sandbox/alpine-lima/
+  - location: "https://github.com/rancher-sandbox/alpine-lima/releases/download/v0.2.43.rd4/alpine-lima-rd-3.21.3-aarch64.iso"
+    arch: "aarch64"
+mounts:
+  - location: "~"
+    writable: true
+  - location: "/tmp/lima"
+    writable: true
+  - location: "/Volumes/osx_external/Downloads"
+    writable: true
+# The built-in containerd installer does not support Alpine currently.
+# Hint: use the "rd" ISO instead of the "std" ISO to enable containerd: https://github.com/lima-vm/alpine-lima/releases/
+containerd:
+  system: false
+  user: false
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      apk add dnsmasq
+      cat <<-EOT >>/etc/dnsmasq.conf
+      server=192.168.5.2
+      address=/local-app.transzap.com/192.168.107.2
+      address=/host.docker.internal/192.168.5.2
+      EOT
+      sed -i 's/^nameserver.*/nameserver 127.0.0.1/' /etc/resolv.conf
+
+      mkdir /etc/docker
+      cat <<-EOT >>/etc/docker/daemon.json
+      { "dns" : [ "192.168.5.15" ] } 
+      EOT
+      rc-update add dnsmasq && rc-service dnsmasq start
+      rc-update add docker && rc-service docker start
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      sudo usermod -aG dnsmasq $USER
+      sudo usermod -aG docker $USER
+probes:
+- script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    if ! timeout 15s bash -c "until pgrep dnsmasq; do sleep 3; sudo /etc/init.d/dnsmasq start; done"; then
+      echo >&2 "dnsmasq is not running"
+      exit 1
+    fi
+
+    if ! timeout 15s bash -c "until pgrep docker; do sleep 3; sudo /etc/init.d/docker start; done"; then
+      echo >&2 "docker is not running"
+      exit 1
+    fi   
+#hostResolver:
+#  # hostResolver.hosts requires lima 0.8.3 or later. Names defined here will also
+#  # resolve inside containers, and not just inside the VM itself.
+#  enabled: false
+#  hosts:
+#    host.docker.internal: 192.168.5.2
+portForwards:
+  - guestSocket: "/var/run/docker.sock"
+    hostSocket: "{{.Dir}}/sock/docker.sock"
+message: "To run `docker` on the host (assumes docker-cli is installed), run the following commands:\n------\ndocker context create lima-{{.Name}} --docker \"host=unix://{{.Dir}}/sock/docker.sock\"\ndocker context use lima-{{.Name}}\ndocker run hello-world\n------      \n"
